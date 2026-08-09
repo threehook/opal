@@ -21,6 +21,8 @@ OPAL_SERVER_URL ?= http://host.docker.internal:7002
 OPAL_AUTH_PRIVATE_KEY ?= /root/ssh/opal_rsa
 OPAL_AUTH_PUBLIC_KEY ?= /root/ssh/opal_rsa.pub
 OPAL_POLICY_STORE_URL ?= http://host.docker.internal:8181
+# If unset, the client-openfga image creates a fresh store on startup and uses that.
+OPENFGA_STORE_ID ?=
 
 # python packages (pypi)
 clean:
@@ -87,6 +89,7 @@ docker-build-next:
 	@docker build -t permitio/opal-client:next --target client -f docker/Dockerfile .
 	@docker build -t permitio/opal-server:next --target server -f docker/Dockerfile .
 	@docker build -t permitio/opal-client-eopa:next --target client-eopa -f docker/Dockerfile .
+	@docker build -t permitio/opal-client-openfga:next --target client-openfga -f docker/Dockerfile .
 
 docker-build-latest:
 	@docker build -t permitio/opal-client-standalone:latest --target client-standalone -f docker/Dockerfile .
@@ -145,3 +148,21 @@ docker-run-server-secure:
 		-e "OPAL_POLICY_REPO_URL=$(OPAL_POLICY_REPO_URL)" \
 		-p 7002:7002 \
 		permitio/opal-server
+
+
+# OpenFGA related
+docker-build-client-openfga:
+	@docker build -t permitio/opal-client-openfga --target client-openfga -f docker/Dockerfile .
+
+docker-run-client-openfga: create-openfga-volume
+	@docker run -it \
+	    -e "OPAL_SERVER_URL=$(OPAL_SERVER_URL)" \
+	    -e "OPAL_POLICY_STORE_TYPE=OPENFGA" \
+	    -e "OPAL_POLICY_STORE_URL=http://0.0.0.0:8080" \
+	    -e "OPAL_OPENFGA_STORE_ID=$(OPENFGA_STORE_ID)" \
+	    -e "OPAL_LOG_FORMAT_INCLUDE_PID=true" \
+	    -v openfga_backup:/opal/backup:rw \
+	    -p 7766:7000 \
+	    -p 8080:8080 \
+	    -p 3000:3000 \
+	    permitio/opal-client-openfga
