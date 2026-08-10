@@ -23,10 +23,16 @@ from opal_client.data.fetcher import DataFetcher
 from opal_client.data.updater import DataUpdater
 from opal_client.engine.options import (
     CedarServerOptions,
+    CerbosServerOptions,
     OpaServerOptions,
     OpenFGAServerOptions,
 )
-from opal_client.engine.runner import CedarRunner, OpaRunner, OpenFGARunner
+from opal_client.engine.runner import (
+    CedarRunner,
+    CerbosRunner,
+    OpaRunner,
+    OpenFGARunner,
+)
 from opal_client.limiter import StartupLoadLimiter
 from opal_client.policy.api import init_policy_router
 from opal_client.policy.updater import PolicyUpdater
@@ -57,6 +63,8 @@ class OpalClient:
         inline_openfga_options: OpenFGAServerOptions = None,
         inline_cedar_enabled: bool = None,
         inline_cedar_options: CedarServerOptions = None,
+        inline_cerbos_enabled: bool = None,
+        inline_cerbos_options: CerbosServerOptions = None,
         verifier: Optional[JWTVerifier] = None,
         store_backup_path: Optional[str] = None,
         store_backup_interval: Optional[int] = None,
@@ -91,6 +99,9 @@ class OpalClient:
 
         inline_cedar_enabled: bool = (
             inline_cedar_enabled or opal_client_config.INLINE_CEDAR_ENABLED
+        )
+        inline_cerbos_enabled: bool = (
+            inline_cerbos_enabled or opal_client_config.INLINE_CERBOS_ENABLED
         )
         opal_client_identifier: str = (
             opal_client_config.OPAL_CLIENT_STAT_ID or f"CLIENT_{uuid.uuid4().hex}"
@@ -179,9 +190,11 @@ class OpalClient:
         self.engine_runner = self._init_engine_runner(
             inline_opa_enabled,
             inline_cedar_enabled,
+            inline_cerbos_enabled,
             inline_openfga_enabled,
             inline_opa_options,
             inline_cedar_options,
+            inline_cerbos_options,
             inline_openfga_options,
         )
 
@@ -222,11 +235,13 @@ class OpalClient:
         self,
         inline_opa_enabled: bool,
         inline_cedar_enabled: bool,
+        inline_cerbos_enabled: bool,
         inline_openfga_enabled: bool,
         inline_opa_options: Optional[OpaServerOptions] = None,
         inline_cedar_options: Optional[CedarServerOptions] = None,
+        inline_cerbos_options: Optional[CerbosServerOptions] = None,
         inline_openfga_options: Optional[OpenFGAServerOptions] = None,
-    ) -> Union[OpaRunner, CedarRunner, OpenFGARunner, Literal[False]]:
+    ) -> Union[OpaRunner, CedarRunner, CerbosRunner, OpenFGARunner, Literal[False]]:
         """Initialize appropriate engine runner based on policy store type."""
 
         # Setup rehydration callbacks for all policy store types
@@ -294,6 +309,35 @@ class OpalClient:
             return CedarRunner.setup_cedar_runner(
                 options=inline_cedar_options,
                 piped_logs_format=opal_client_config.INLINE_CEDAR_LOG_FORMAT,
+            )
+
+        elif (
+            inline_cerbos_enabled and self.policy_store_type == PolicyStoreTypes.CERBOS
+        ):
+            inline_cerbos_options = (
+                inline_cerbos_options or opal_client_config.INLINE_CERBOS_CONFIG
+            )
+            rehydration_callbacks = []
+
+            # Cerbos's disk store starts empty on every process restart (policies
+            # are pushed via the admin API, not persisted to disk), so a fresh
+            # policy sync is needed each time the engine comes back up - same
+            # reasoning as OPA's rehydration above. Data has no Cerbos equivalent
+            # (see CerbosClient.set_policy_data), so there's nothing to rehydrate there.
+            if self.policy_updater:
+
+                async def _rehydrate_policy():
+                    if not self.opal_server_connectivity_disabled:
+                        await self.policy_updater.trigger_update_policy(
+                            force_full_update=True,
+                        )
+
+                rehydration_callbacks.append(_rehydrate_policy)
+
+            return CerbosRunner.setup_cerbos_runner(
+                options=inline_cerbos_options,
+                piped_logs_format=opal_client_config.INLINE_CERBOS_LOG_FORMAT,
+                rehydration_callbacks=rehydration_callbacks,
             )
 
         # OpenFGA Runner
